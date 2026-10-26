@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.11x-009688)](https://fastapi.tiangolo.com/)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57)](https://sqlite.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](#license)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](#license)
 
 **English**: An OpenAI-compatible video generation gateway backed by a pool of Pippit accounts running Dreamina **Seedance 2.5**. One API key drives the whole pool: account selection, queueing, retries, segment stitching, storage and cleanup are handled server-side.
 
