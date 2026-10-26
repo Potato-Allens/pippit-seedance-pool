@@ -380,4 +380,4 @@ A：上限 = `WZ_MAX_WORKERS`。单 Key 并发由 `WZ_PER_KEY_CONCURRENCY` 限�
 
 ## License
 
-MIT
+Apache License 2.0 —— 见 [LICENSE](LICENSE)。
