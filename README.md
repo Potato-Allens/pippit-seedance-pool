@@ -39,8 +39,8 @@ Pippit 的单账号有积分上限、有平台侧限速，单个账号跑不出�
 
 这个项目把「一堆账号」抽象成「一个 OpenAI 风格 API」：
 
-- 上游 30 个并发客户端 → 下游自动摊到几百个账号上；
-- 单个账号被限速/掉登录 → 自动换号重试，客户端无感；
+- 上游几十个并发客户端 → 下游自动摊到几百个账号上；
+- 单个账号被限速或掉登录 → 自动换号重试，客户端无感；
 - 客户端只关心 `POST /v1/videos` 和 `GET /v1/videos/{id}`，不需要知道池子里有几个号。
 
 ## 特性
@@ -50,11 +50,11 @@ Pippit 的单账号有积分上限、有平台侧限速，单个账号跑不出�
 | OpenAI 风格端点 | `POST /v1/videos`、`POST /v1/video/generations`（别名）、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content` |
 | 异步任务模型 | 立即返回 `queued`，轮询状态：`queued / in_progress / completed / failed / canceled` |
 | 自动选号 | 按「积分够不够 + 冷却时间 + 最近使用」挑账号，失败自动换号 |
-| 单段 / 多段两条车道 | `<=17s` 单段直出；更长自动分段 + 交叉淡化拼接 |
+| 单段 / 多段两条车道 | `<= 17s` 单段直出；更长自动分段 + 交叉淡化拼接 |
 | 积分核算 | 每条约 4 积分/秒（实测），额度不足时返回 503 并给出池内最大余额 |
 | 任务落盘 | 视频按 `data/videos/<job_id>.mp4` 保存，支持 Range 下载与 `HEAD` 探测 |
 | 管理面 | API Key 增删查、账号导入/刷新、任务列表/清理、总台面板 `/master` |
-| 看门狗 | 心跳事件 + 僵尸任务回收 + 账号冷却，避免“重复提交、重复扣分” |
+| 看门狗 | 心跳事件 + 僵尸任务回收 + 账号冷却，避免「重复提交、重复扣分」 |
 | 单文件部署 | FastAPI + SQLite，无外部依赖；systemd 一条命令起服务 |
 
 ## 架构
@@ -238,16 +238,16 @@ curl -s -X POST -H "Authorization: Bearer $KEY" http://127.0.0.1:8788/v1/videos/
 
 这是本项目最容易踩的坑，先说结论：
 
-> **请求时长 ≠ 产出时长。** 平台侧单次生成的时长是模型自己决定的，实测落在 **15~22s**。
+> **请求时长 ≠ 产出时长。** 平台侧单次生成的时长由模型自己决定，实测落在 **15~22s**。
 
 规则（`worker.py`）：
 
 ```python
-multi = secs > seg_cap + 2      # 2.5: seg_cap = 15  -> > 17s 才拼接
+multi = secs > seg_cap + 2      # 2.5: seg_cap = 15  ->  >17s 才拼接
 ```
 
 - `seconds <= 17` → **单段**：一次 `submit_run`，出多少给多少，不做裁切。耗时通常 4~10 分钟。
-- `seconds > 17` → **多段**：按 15s/段切片，每段生成后再交叉淡化拼接，最后裁到目标时长。耗时 10~35 分钟。
+- `seconds > 17` → **多段**：按 15s/段切片，逐段生成后交叉淡化拼接，最后裁到目标时长。耗时 10~35 分钟。
 
 规划阶段拿不到可信时长：`generate_video_idea` 的 `duration_sec` 实测恒为 `8.0` 占位值（连续 5 次），强制渲染得到 20.016s，偏差 2.5 倍 —— **不要用它做预筛**。
 
@@ -270,12 +270,12 @@ multi = secs > seg_cap + 2      # 2.5: seg_cap = 15  -> > 17s 才拼接
 |---|---|---|
 | 看门狗误重排 | 14 次 / 30 min | **0 次 / 25 min** |
 | 单条 30s 平均耗时 | 19.6 min | 11~17 min |
-| 状态抖动（queued↔in_progress） | 频繁 | 基本消失 |
+| 状态抖动（queued ↔ in_progress） | 频繁 | 基本消失 |
 
 ## 号池运维
 
 ```bash
-# 导入账号（cookies 需带 domain=.pippit.ai，否则上游返回 1015）
+# 导入账号（cookies 必须带 domain=".pippit.ai"，否则上游返回 1015）
 curl -s -X POST http://127.0.0.1:8788/admin/accounts/import \
   -H "X-Admin-Token: $ADMIN" -H 'Content-Type: application/json' \
   -d '{"accounts":[{"uid":"...","tag":"farm1","cookies":[...],"workspace_id":"...","space_id":"..."}]}'
@@ -286,7 +286,7 @@ curl -s -X POST http://127.0.0.1:8788/admin/accounts/refresh -H "X-Admin-Token: 
 
 约定：
 
-- `status`：`ready`（可接单）/ `busy`（被租用）/ 冷却由 `cooldown_until` 控制。
+- `status`：`ready`（可接单）/ `busy`（被租用）；冷却由 `cooldown_until` 控制。
 - `credit`：账号剩余积分；`WZ_AUTO_CLAIM=1` 时低于 120 会自动领每日积分。
 - 账号文件锁在 `data/locks/<uid>.lock`，进程重启时视为过期并清理。
 
@@ -299,26 +299,25 @@ curl -s -X POST http://127.0.0.1:8788/admin/accounts/refresh -H "X-Admin-Token: 
 │   ├── worker.py           # Worker 池：抢单、选号、分段、拼接、看门狗
 │   ├── pippit.py           # Pippit 协议客户端：submit_run / get_thread / asset / download
 │   ├── db.py               # SQLite 访问层：jobs / accounts / api_keys / events
-│   ├── refs.py             # 参考图/视频/音频上传
+│   ├── refs.py             # 参考图 / 视频 / 音频上传
 │   ├── _pp_http.py         # HTTP 层：签名、cookie、重试
 │   ├── panel.py            # /master 总台面板后端
 │   ├── panel.html          # /master 前端
 │   ├── requirements.txt
 │   └── openapi.json        # 静态 OpenAPI 快照
 ├── clients/
-│   └── openai_client.py    # 最小可用客户端（create/poll/download）
+│   └── openai_client.py    # 最小可用客户端（create / poll / download）
 ├── examples/
 │   ├── curl.sh
 │   └── python_sdk_style.py
 ├── docs/
 │   ├── API.md              # 全量接口文档
-│   └── PROTOCOL.md         # 上游协议笔记（submit_run / get_thread / 资产 / 计费）
+│   ├── PROTOCOL.md         # 上游协议笔记（submit_run / get_thread / 资产 / 计费）
+│   └── SERVER-README.zh.md # 服务端原始中文说明
 └── README.md
 ```
 
 ## 本地工具
-
-仓库里带的调试脚本（都在 `clients/`、`examples/`）：
 
 | 脚本 | 用途 |
 |---|---|
@@ -353,13 +352,13 @@ curl -s -X POST http://127.0.0.1:8788/admin/accounts/refresh -H "X-Admin-Token: 
 
 ## 常见问题
 
-**Q：为什么 `seconds:30` 只给我 15 秒？**
-A：单段车道下平台自己决定时长。要 30 秒用 `-30s` 模型走拼接，代价是 10~35 分钟。
+**Q：为什么 `seconds: 30` 只给我 15 秒？**
+A：单段车道下平台自己决定时长。要 30 秒请用 `-30s` 模型走拼接，代价是 10~35 分钟。
 
 **Q：任务一直 `in_progress 40%`？**
-A：40% = 已提交、平台侧生成中。日志里 `hb` 事件每 150s 一条即为正常；超过 20 分钟无进展会自动换号重试。
+A：40% = 已提交、平台侧生成中。日志里每 150s 一条 `hb` 事件即为正常；超过 20 分钟无进展会自动换号重试。
 
-**Q：为什么我导进去的账号全部 `ret=1015`？**
+**Q：为什么导进去的账号全部 `ret=1015`？**
 A：cookies 缺 `domain`。补成 `domain=".pippit.ai"` 再导入。
 
 **Q：能同时跑多少条？**
@@ -367,8 +366,8 @@ A：上限 = `WZ_MAX_WORKERS`。单 Key 并发由 `WZ_PER_KEY_CONCURRENCY` 限�
 
 ## 安全声明
 
-- 本仓库**不包含**任何账号、cookie、API Key、管理令牌或生产环境地址；所有敏感值通过环境变量或 `data/` 注入，且 `data/` 已在 `.gitignore` 中。
-- 项目用于**自有账号/已获授权环境**的批量视频生产与协议研究。使用者需自行确认对账号、内容与上游服务条款的合规性，作者不对滥用负责。
+- 本仓库**不包含**任何账号、cookie、API Key、管理令牌或生产环境地址；敏感值一律通过环境变量或 `data/` 注入，`data/` 已在 `.gitignore` 中。
+- 项目用于**自有账号 / 已获授权环境**的批量视频生产与协议研究。使用者需自行确认对账号、内容与上游服务条款的合规性，作者不对滥用负责。
 - 上游是第三方服务，接口随时可能变更；本项目通过 `docs/PROTOCOL.md` 记录观测到的协议行为，不保证长期兼容。
 
 ## Roadmap
